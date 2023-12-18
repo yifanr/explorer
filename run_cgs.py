@@ -1,7 +1,7 @@
 import torch  # https://pytorch.org
 import torchvision  # https://pytorch.org
-from network import VQVAE, CVQVAE, AE
-from gradients import update_VQ, update_AE
+from network import CGSAE
+from gradients import update_CGS
 import optax
 import equinox as eqx
 from jaxtyping import Array, Float, Int, PyTree  # https://github.com/google/jaxtyping
@@ -13,11 +13,12 @@ from matplotlib.patches import Ellipse
 
 BATCH_SIZE = 512
 LEARNING_RATE = 3e-4
-TOTAL_STEPS = 5120000
+TOTAL_STEPS = 1024000
 STEPS = int(TOTAL_STEPS/BATCH_SIZE)
-NUM_CLUSTERS = 24
 VISUALIZE = False
-EMBEDDING_DIM = 8
+EMBEDDING_DIM = 16
+MAX_TEMP = 5
+MIN_TEMP = 0.5
 
 normalise_data = torchvision.transforms.Compose(
     [
@@ -45,18 +46,19 @@ testloader = torch.utils.data.DataLoader(
 )
 key = jax.random.PRNGKey(42)
 subkey, key = jax.random.split(key)
-model = VQVAE(28*28, EMBEDDING_DIM, NUM_CLUSTERS, subkey)
+model = CGSAE(1, EMBEDDING_DIM, subkey)
 # model = AE(28*28, 8, jax.random.PRNGKey(42))
 optim = optax.adamw(LEARNING_RATE)
 
 @eqx.filter_jit
 def make_step(
-    model: VQVAE,
+    model: CGSAE,
     opt_state: PyTree,
     x: Float[Array, "batch 1 28 28"],
+    temperature: Float,
+    key: jax.random.PRNGKey,
 ):
-    x = jnp.reshape(x, (x.shape[0], 28*28))
-    loss_value, grads = update_VQ(model, x)
+    loss_value, grads = update_CGS(model, x, temperature, key)
     updates, opt_state = optim.update(grads, opt_state, model)
     model = eqx.apply_updates(model, updates)
     return model, opt_state, loss_value
@@ -78,13 +80,14 @@ for step, (x, y) in zip(range(STEPS), infinite_trainloader()):
     # so convert them to NumPy arrays.
     x = x.numpy()
     y = y.numpy()
-    model, opt_state, train_loss = make_step(model, opt_state, x)
+    temperature = MAX_TEMP * (MIN_TEMP/MAX_TEMP)**(step/STEPS)
+    subkey, key = jax.random.split(key)
+    model, opt_state, train_loss = make_step(model, opt_state, x, temperature, subkey)
     if (step % 200) == 0 or (step == STEPS - 1):
         print(
             f"{step=}, train_loss={train_loss.item()}, "
         )
     if VISUALIZE and ((step % 200) == 0 or (step == STEPS - 1)):
-        x = jnp.reshape(x, (x.shape[0], 28*28))
         subkeys = jax.random.split(key, x.shape[0])
         encodings = eqx.filter_vmap(model.encode)(x)
         quantized, indices = eqx.filter_vmap(model.quantize)(encodings)
@@ -108,10 +111,9 @@ for i in range(20):
     pixels = dummy_x.reshape((28, 28))
     plt.imshow(pixels, cmap='gray')
     plt.show()
-    encoded = model.encode(dummy_x.reshape(-1))
-    quantized, index = model.quantize(encoded)
+    subkey, key = jax.random.split(key)
+    encoded = model.encode(dummy_x, 0.01, subkey)
     reconstruction = model.decode(encoded)
     pixels = reconstruction.reshape((28, 28))
-    print(index)
     plt.imshow(pixels, cmap='gray')
     plt.show()

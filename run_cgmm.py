@@ -1,6 +1,6 @@
 import torch  # https://pytorch.org
 import torchvision  # https://pytorch.org
-from network import GMMVAE
+from network import CGMMVAE
 from gradients import update_GMM
 import optax
 import equinox as eqx
@@ -45,7 +45,7 @@ testloader = torch.utils.data.DataLoader(
 )
 key = jax.random.PRNGKey(42)
 key, subkey = jax.random.split(key, 2)
-model = GMMVAE(28*28, EMBEDDING_DIM, NUM_CLUSTERS, subkey)
+model = CGMMVAE(1, EMBEDDING_DIM, NUM_CLUSTERS, subkey)
 # model = AE(28*28, 8, jax.random.PRNGKey(42))
 
 filter = jtu.tree_map(lambda _: False, model)
@@ -61,12 +61,11 @@ optim = optax.multi_transform(
 
 @eqx.filter_jit
 def make_step(
-    model: GMMVAE,
+    model: CGMMVAE,
     opt_state: PyTree,
     x: Float[Array, "batch 1 28 28"],
     key
 ):
-    x = jnp.reshape(x, (x.shape[0], 28*28))
     (loss_value, (reconstruction_loss, size_loss, mean_loss, variance_loss)), grads = update_GMM(model, x, key)
     updates, opt_state = optim.update(grads, opt_state, model)
     model = eqx.apply_updates(model, updates)
@@ -100,41 +99,40 @@ for step, (x, y) in zip(range(STEPS), infinite_trainloader()):
         # distribution = distrax.MultivariateNormalFullCovariance(model.means.weight, model.covariances)
         # print(jnp.count_nonzero(jnp.isnan(distribution.sample(seed=subkey))))
         print((jnp.min(model.covariances).item(), jnp.max(model.covariances).item()), (jnp.min(model.means.weight).item(), jnp.max(model.means.weight).item()), (jnp.min(model.sizes).item(), jnp.max(model.sizes).item()))
-        x = jnp.reshape(x, (x.shape[0], 28*28))
         (loss_value, (reconstruction_loss, size_loss, mean_loss, variance_loss)), grads = update_GMM(model, x, subkey)
         print((reconstruction_loss.item(), size_loss.item(), mean_loss.item(), variance_loss.item()))
         print(jnp.min(jnp.linalg.eigvalsh(model.covariances)))
 
-    # if (step == STEPS - 1):
-    #     subkeys = jax.random.split(key, x.shape[0])
-    #     encodings = eqx.filter_vmap(model.encode)(x)
-    #     quantized, log_probs, indices = eqx.filter_vmap(model.quantize)(encodings, subkeys)
-    #     colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
+    if (step % 1000) == 0 or (step == STEPS - 1):
+        subkeys = jax.random.split(key, x.shape[0])
+        encodings = eqx.filter_vmap(model.encode)(x)
+        quantized, log_probs, indices = eqx.filter_vmap(model.quantize)(encodings, subkeys)
+        colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
 
-    #     # ax = plt.subplot(111, aspect='equal')
-    #     eigenvalues, eigenvectors = jnp.linalg.eigh(model.covariances[:,0:2,0:2])
-    #     for i in range(NUM_CLUSTERS):
-    #         theta = jnp.linspace(0, 2*jnp.pi, 1000)
-    #         ellipsis = (jnp.sqrt(eigenvalues[i][None,:]) * eigenvectors[i]) @ jnp.asarray([jnp.sin(theta), jnp.cos(theta)])
-    #         # ellipsis *= model.sizes[i] * NUM_CLUSTERS
-    #         ellipsis += model.means.weight[i][0:2,None]
-    #         plt.plot(ellipsis[0,:], ellipsis[1,:], color=colors[i])
-    #     plt.scatter(encodings[:,0], encodings[:,1], c=colors[indices])
-    #     plt.show()
-    #     for i in range(5):
-    #         key, subkey = jax.random.split(key, 2)
-    #         dummy_x, dummy_y = next(iter(testloader))
-    #         dummy_x = dummy_x[0].numpy()
-    #         pixels = dummy_x.reshape((28, 28))
-    #         plt.imshow(pixels, cmap='gray')
-    #         plt.show()
-    #         encoded = model.encode(dummy_x.reshape(-1))
-    #         quantized, log_prob, index = model.quantize(encoded, subkey)
-    #         reconstruction = model.decode(quantized)
-    #         pixels = reconstruction.reshape((28, 28))
-    #         print(index)
-    #         plt.imshow(pixels, cmap='gray')
-    #         plt.show()
+        # ax = plt.subplot(111, aspect='equal')
+        eigenvalues, eigenvectors = jnp.linalg.eigh(model.covariances[:,0:2,0:2])
+        for i in range(NUM_CLUSTERS):
+            theta = jnp.linspace(0, 2*jnp.pi, 1000)
+            ellipsis = (jnp.sqrt(eigenvalues[i][None,:]) * eigenvectors[i]) @ jnp.asarray([jnp.sin(theta), jnp.cos(theta)])
+            # ellipsis *= model.sizes[i] * NUM_CLUSTERS
+            ellipsis += model.means.weight[i][0:2,None]
+            plt.plot(ellipsis[0,:], ellipsis[1,:], color=colors[i])
+        plt.scatter(encodings[:,0], encodings[:,1], c=colors[indices])
+        plt.show()
+        for i in range(5):
+            key, subkey = jax.random.split(key, 2)
+            dummy_x, dummy_y = next(iter(testloader))
+            dummy_x = dummy_x[0].numpy()
+            pixels = dummy_x.reshape((28, 28))
+            plt.imshow(pixels, cmap='gray')
+            plt.show()
+            encoded = model.encode(dummy_x)
+            quantized, log_prob, index = model.quantize(encoded, subkey)
+            reconstruction = model.decode(encoded)
+            pixels = reconstruction.reshape((28, 28))
+            print(index)
+            plt.imshow(pixels, cmap='gray')
+            plt.show()
 
 
 

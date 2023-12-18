@@ -16,8 +16,7 @@ from matplotlib.patches import Ellipse
 BATCH_SIZE = 64
 LEARNING_RATE = 3e-4
 STEPS = 30000
-NUM_CLUSTERS = 32
-EMBEDDING_DIM = 8
+NUM_CLUSTERS = 12
 
 normalise_data = torchvision.transforms.Compose(
     [
@@ -45,7 +44,7 @@ testloader = torch.utils.data.DataLoader(
 )
 key = jax.random.PRNGKey(42)
 key, subkey = jax.random.split(key, 2)
-model = GMMVAE(28*28, EMBEDDING_DIM, NUM_CLUSTERS, subkey)
+model = GMMVAE(28*28, 2, NUM_CLUSTERS, subkey)
 # model = AE(28*28, 8, jax.random.PRNGKey(42))
 
 filter = jtu.tree_map(lambda _: False, model)
@@ -53,11 +52,11 @@ filter = eqx.tree_at(
     lambda tree: (tree.means, tree.sizes, tree.covariances),
     filter,
     replace=(True, True, True),)
-optim = optax.multi_transform(
-    {False: optax.adam(LEARNING_RATE), True: optax.sgd(LEARNING_RATE)},
-    filter
-)
-# optim = optax.adam(LEARNING_RATE)
+# optim = optax.multi_transform(
+#     {False: optax.adam(LEARNING_RATE), True: optax.sgd(1e-4)},
+#     filter
+# )
+optim = optax.adam(LEARNING_RATE)
 
 @eqx.filter_jit
 def make_step(
@@ -91,54 +90,58 @@ for step, (x, y) in zip(range(STEPS), infinite_trainloader()):
     x = x.numpy()
     y = y.numpy()
     model, opt_state, train_loss = make_step(model, opt_state, x, subkey)
-    dangerous = False
-    if (step % 1000) == 0 or (step == STEPS - 1) or dangerous:
+    if (step % 200) == 0 or (step == STEPS - 1):
         print(
             f"{step=}, train_loss={train_loss.item()}, "
         )
         # print(jnp.count_nonzero(jnp.isnan(model.means.weight)))
         # distribution = distrax.MultivariateNormalFullCovariance(model.means.weight, model.covariances)
         # print(jnp.count_nonzero(jnp.isnan(distribution.sample(seed=subkey))))
-        print((jnp.min(model.covariances).item(), jnp.max(model.covariances).item()), (jnp.min(model.means.weight).item(), jnp.max(model.means.weight).item()), (jnp.min(model.sizes).item(), jnp.max(model.sizes).item()))
+        # print(jnp.min(model.variances))
+        # print(jnp.max(model.variances))
+        # print(jnp.min(model.means.weight))
+        # print(jnp.max(model.means.weight))
+        # print(jnp.min(model.sizes))
+        # print(jnp.max(model.sizes))
         x = jnp.reshape(x, (x.shape[0], 28*28))
         (loss_value, (reconstruction_loss, size_loss, mean_loss, variance_loss)), grads = update_GMM(model, x, subkey)
         print((reconstruction_loss.item(), size_loss.item(), mean_loss.item(), variance_loss.item()))
         print(jnp.min(jnp.linalg.eigvalsh(model.covariances)))
 
-    # if (step == STEPS - 1):
-    #     subkeys = jax.random.split(key, x.shape[0])
-    #     encodings = eqx.filter_vmap(model.encode)(x)
-    #     quantized, log_probs, indices = eqx.filter_vmap(model.quantize)(encodings, subkeys)
-    #     colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
+    if ((step % 2000) == 0 or (step == STEPS - 1)):
+        subkeys = jax.random.split(key, x.shape[0])
+        encodings = eqx.filter_vmap(model.encode)(x)
+        quantized, log_probs, indices = eqx.filter_vmap(model.quantize)(encodings, subkeys)
+        colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
 
-    #     # ax = plt.subplot(111, aspect='equal')
-    #     eigenvalues, eigenvectors = jnp.linalg.eigh(model.covariances[:,0:2,0:2])
-    #     for i in range(NUM_CLUSTERS):
-    #         theta = jnp.linspace(0, 2*jnp.pi, 1000)
-    #         ellipsis = (jnp.sqrt(eigenvalues[i][None,:]) * eigenvectors[i]) @ jnp.asarray([jnp.sin(theta), jnp.cos(theta)])
-    #         # ellipsis *= model.sizes[i] * NUM_CLUSTERS
-    #         ellipsis += model.means.weight[i][0:2,None]
-    #         plt.plot(ellipsis[0,:], ellipsis[1,:], color=colors[i])
-    #     plt.scatter(encodings[:,0], encodings[:,1], c=colors[indices])
-    #     plt.show()
-    #     for i in range(5):
-    #         key, subkey = jax.random.split(key, 2)
-    #         dummy_x, dummy_y = next(iter(testloader))
-    #         dummy_x = dummy_x[0].numpy()
-    #         pixels = dummy_x.reshape((28, 28))
-    #         plt.imshow(pixels, cmap='gray')
-    #         plt.show()
-    #         encoded = model.encode(dummy_x.reshape(-1))
-    #         quantized, log_prob, index = model.quantize(encoded, subkey)
-    #         reconstruction = model.decode(quantized)
-    #         pixels = reconstruction.reshape((28, 28))
-    #         print(index)
-    #         plt.imshow(pixels, cmap='gray')
-    #         plt.show()
+        # ax = plt.subplot(111, aspect='equal')
+        eigenvalues, eigenvectors = jnp.linalg.eigh(model.covariances)
+        for i in range(NUM_CLUSTERS):
+            theta = jnp.linspace(0, 2*jnp.pi, 1000)
+            ellipsis = (jnp.sqrt(eigenvalues[i][None,:]) * eigenvectors[i]) @ jnp.asarray([jnp.sin(theta), jnp.cos(theta)])
+            # ellipsis *= model.sizes[i] * NUM_CLUSTERS
+            ellipsis += model.means.weight[i][:,None]
+            plt.plot(ellipsis[0,:], ellipsis[1,:], color=colors[i])
+        plt.scatter(encodings[:,0], encodings[:,1], c=colors[indices])
+        plt.show()
+        for i in range(5):
+            key, subkey = jax.random.split(key, 2)
+            dummy_x, dummy_y = next(iter(testloader))
+            dummy_x = dummy_x[0].numpy()
+            pixels = dummy_x.reshape((28, 28))
+            plt.imshow(pixels, cmap='gray')
+            plt.show()
+            encoded = model.encode(dummy_x.reshape(-1))
+            quantized, log_prob, index = model.quantize(encoded, subkey)
+            reconstruction = model.decode(encoded)
+            pixels = reconstruction.reshape((28, 28))
+            print(index)
+            plt.imshow(pixels, cmap='gray')
+            plt.show()
 
 
 
-for i in range(50):
+for i in range(20):
     key, subkey = jax.random.split(key, 2)
     dummy_x, dummy_y = next(iter(testloader))
     dummy_x = dummy_x[0].numpy()
@@ -147,7 +150,7 @@ for i in range(50):
     plt.show()
     encoded = model.encode(dummy_x.reshape(-1))
     quantized, log_prob, index = model.quantize(encoded, subkey)
-    reconstruction = model.decode(quantized)
+    reconstruction = model.decode(encoded)
     pixels = reconstruction.reshape((28, 28))
     print(index)
     plt.imshow(pixels, cmap='gray')

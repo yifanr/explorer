@@ -8,10 +8,16 @@ from jaxtyping import Array, Float, Int, PyTree  # https://github.com/google/jax
 import jax.numpy as jnp
 import jax
 from matplotlib import pyplot as plt
+import matplotlib.cm as cm
+from matplotlib.patches import Ellipse
 
-BATCH_SIZE = 64
+BATCH_SIZE = 512
 LEARNING_RATE = 3e-4
-STEPS = 5000
+TOTAL_STEPS = 5120000
+STEPS = int(TOTAL_STEPS/BATCH_SIZE)
+NUM_CLUSTERS = 24
+VISUALIZE = False
+EMBEDDING_DIM = 8
 
 normalise_data = torchvision.transforms.Compose(
     [
@@ -37,8 +43,9 @@ trainloader = torch.utils.data.DataLoader(
 testloader = torch.utils.data.DataLoader(
     test_dataset, batch_size=BATCH_SIZE, shuffle=True
 )
-
-model = VQVAE(28*28, 8, 32, jax.random.PRNGKey(42))
+key = jax.random.PRNGKey(42)
+subkey, key = jax.random.split(key)
+model = VQVAE(28*28, EMBEDDING_DIM, NUM_CLUSTERS, subkey)
 # model = AE(28*28, 8, jax.random.PRNGKey(42))
 optim = optax.adamw(LEARNING_RATE)
 
@@ -76,6 +83,24 @@ for step, (x, y) in zip(range(STEPS), infinite_trainloader()):
         print(
             f"{step=}, train_loss={train_loss.item()}, "
         )
+    if VISUALIZE and ((step % 200) == 0 or (step == STEPS - 1)):
+        x = jnp.reshape(x, (x.shape[0], 28*28))
+        subkeys = jax.random.split(key, x.shape[0])
+        encodings = eqx.filter_vmap(model.encode)(x)
+        quantized, indices = eqx.filter_vmap(model.quantize)(encodings)
+        colors = cm.rainbow(jnp.linspace(0, 1, 10))
+        # colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
+
+        # ax = plt.subplot(111, aspect='equal')
+        # plt.scatter(encodings[:,0], encodings[:,1], c=colors[y], label = y)
+        
+        #plotting the results:
+        u_labels = jnp.unique(y)
+        for i in u_labels:
+            plt.scatter(encodings[y == i, 0] , encodings[y == i , 1] , label = i)
+        plt.scatter(model.embedding[:,0] , model.embedding[:,1] , s = 80, color = 'black')
+        plt.legend()
+        plt.show()
 
 for i in range(20):
     dummy_x, dummy_y = next(iter(testloader))

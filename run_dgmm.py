@@ -14,8 +14,8 @@ import matplotlib.cm as cm
 from matplotlib.patches import Ellipse
 
 BATCH_SIZE = 64
-LEARNING_RATE = 1e-5
-STEPS = 100000
+LEARNING_RATE = 3e-5
+STEPS = 10000
 NUM_CLUSTERS = 12
 
 normalise_data = torchvision.transforms.Compose(
@@ -108,23 +108,23 @@ for step, (x, y) in zip(range(STEPS), infinite_trainloader()):
         print((reconstruction_loss.item(), size_loss.item(), mean_loss.item(), variance_loss.item()))
         print(jnp.min(model.sizes))
 
-    # if ((step % 500) == 0 or (step == STEPS - 1)) and (variance_loss > 10000):
-    #     subkeys = jax.random.split(key, x.shape[0])
-    #     encodings = eqx.filter_vmap(model.encode)(x)
-    #     quantized, log_probs, indices = eqx.filter_vmap(model.quantize)(encodings, subkeys)
-    #     colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
+    if ((step % 500) == 0 or (step == STEPS - 1)):
+        subkeys = jax.random.split(key, x.shape[0])
+        encodings = eqx.filter_vmap(model.encode)(x)
+        quantized, log_probs, indices = eqx.filter_vmap(model.quantize)(encodings, subkeys)
+        colors = cm.rainbow(jnp.linspace(0, 1, NUM_CLUSTERS))
 
-    #     # ax = plt.subplot(111, aspect='equal')
-    #     covariances = jax.vmap(jnp.diag)(model.variances)
-    #     eigenvalues, eigenvectors = jnp.linalg.eigh(covariances)
-    #     for i in range(NUM_CLUSTERS):
-    #         theta = jnp.linspace(0, 2*jnp.pi, 1000)
-    #         ellipsis = (jnp.sqrt(eigenvalues[i][None,:]) * eigenvectors[i]) @ jnp.asarray([jnp.sin(theta), jnp.cos(theta)])
-    #         ellipsis *= model.sizes[i] * NUM_CLUSTERS
-    #         ellipsis += model.means.weight[i][:,None]
-    #         plt.plot(ellipsis[0,:], ellipsis[1,:], color=colors[i])
-    #     plt.scatter(encodings[:,0], encodings[:,1], c=colors[indices])
-    #     plt.show()
+        # ax = plt.subplot(111, aspect='equal')
+        covariances = jax.vmap(jnp.diag)(model.variances)
+        eigenvalues, eigenvectors = jnp.linalg.eigh(covariances)
+        for i in range(NUM_CLUSTERS):
+            theta = jnp.linspace(0, 2*jnp.pi, 1000)
+            ellipsis = (jnp.sqrt(eigenvalues[i][None,:]) * eigenvectors[i]) @ jnp.asarray([jnp.sin(theta), jnp.cos(theta)])
+            # ellipsis *= model.sizes[i] * NUM_CLUSTERS
+            ellipsis += model.means.weight[i][:,None]
+            plt.plot(ellipsis[0,:], ellipsis[1,:], color=colors[i])
+        plt.scatter(encodings[:,0], encodings[:,1], c=colors[indices])
+        plt.show()
 
 
 for i in range(20):
